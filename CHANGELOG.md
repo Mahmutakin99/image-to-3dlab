@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Find Pixal3D's adjacent macOS libraries after moving an installation.
 - Release model viewport geometry, materials, textures, and environment resources when closing a preview.
 
 ### Added

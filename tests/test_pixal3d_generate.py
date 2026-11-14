@@ -763,3 +763,23 @@ def test_a_shape_without_its_record_is_allowed(tmp_path):
     shape = tmp_path / "loose.shape.bin"
     shape.write_bytes(b"x")
     assert px.reuse_problem(shape, has_back=True) is None
+
+
+def test_moved_mac_install_finds_its_own_dylibs(tmp_path, monkeypatch, no_rocm):
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "libggml.0.dylib").touch()
+    monkeypatch.setattr(px, "PIXAL3D_ROOT", tmp_path)
+    monkeypatch.setattr(px.sys, "platform", "darwin")
+    env = px.run_env(None, {"DYLD_LIBRARY_PATH": "/existing"})
+    assert env["DYLD_LIBRARY_PATH"] == f"{build}:/existing"
+
+
+def test_mac_dylib_path_is_not_duplicated(tmp_path, monkeypatch, no_rocm):
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "libggml.0.dylib").touch()
+    monkeypatch.setattr(px, "PIXAL3D_ROOT", tmp_path)
+    monkeypatch.setattr(px.sys, "platform", "darwin")
+    env = px.run_env(None, {"DYLD_LIBRARY_PATH": str(build)})
+    assert env["DYLD_LIBRARY_PATH"] == str(build)

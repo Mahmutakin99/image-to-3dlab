@@ -457,6 +457,13 @@ def run_env(steps: int | None, base: dict[str, str] | None = None,
         env[SHAPE_LOAD_ENV] = str(load_shape)
     elif save_shape is not None:
         env[SHAPE_SAVE_ENV] = str(save_shape)
+    # A moved macOS installation may retain absolute build-time rpaths. Keep the
+    # dylibs beside this CLI discoverable without changing the user's shell settings.
+    build = PIXAL3D_ROOT / "build"
+    if sys.platform == "darwin" and (build / "libggml.0.dylib").is_file():
+        existing = env.get("DYLD_LIBRARY_PATH", "")
+        if str(build) not in existing.split(os.pathsep):
+            env["DYLD_LIBRARY_PATH"] = str(build) + (os.pathsep + existing if existing else "")
     rocm = rocm_library_path(env)
     if rocm is not None:
         existing = env.get("LD_LIBRARY_PATH", "")
