@@ -652,3 +652,40 @@ def test_every_viewer_script_parses(script):
     )
     assert result.returncode == 0, result.stderr.decode()
 
+
+@pytest.mark.skipif(NODE is None, reason="Node is required to execute browser ES modules")
+def test_viewport_releases_owned_resources_once():
+    module_url = (REPO / "viewer/components/model-viewport.js").as_uri()
+    three_url = (REPO / "viewer/vendor/three.module.js").as_uri()
+    program = f"""
+      import {{ register }} from 'node:module';
+      register('data:text/javascript,' + encodeURIComponent(`export async function resolve(s,c,n) {{
+        if(s === 'three') return {{url: {json.dumps(three_url)}, shortCircuit:true}};
+        return n(s,c);
+      }}`));
+      const {{disposeModelViewport}} = await import({json.dumps(module_url)});
+      const THREE = await import({json.dumps(three_url)});
+      const count = {{geometry:0, material:0, texture:0, renderer:0, environment:0}};
+      const geometry = new THREE.BoxGeometry();
+      const material = new THREE.MeshBasicMaterial();
+      const texture = new THREE.Texture();
+      material.map = texture;
+      for (const [item,key] of [[geometry,'geometry'],[material,'material'],[texture,'texture']])
+        item.addEventListener('dispose', () => count[key]++);
+      const root = new THREE.Group();
+      root.add(new THREE.Mesh(geometry,material), new THREE.Mesh(geometry,material));
+      const scene = new THREE.Scene(); scene.add(root);
+      const environment = new THREE.Texture();
+      environment.addEventListener('dispose', () => count.environment++);
+      scene.environment = environment;
+      const view = {{root, modelRoot:root, scene, materials:[{{original:material}}],
+        controls:{{dispose(){{}}}}, renderer:{{dispose(){{count.renderer++;}}, forceContextLoss(){{}}}}}};
+      disposeModelViewport(view); disposeModelViewport(view);
+      console.log(JSON.stringify({{count, root:view.root, materials:view.materials.length}}));
+    """
+    result = subprocess.run([NODE, "--input-type=module", "--eval", program],
+                            check=True, capture_output=True, text=True)
+    assert json.loads(result.stdout) == {
+        "count": {"geometry": 1, "material": 1, "texture": 1, "renderer": 1, "environment": 1},
+        "root": None, "materials": 0,
+    }

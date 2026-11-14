@@ -49,6 +49,34 @@ export function createModelViewport({ pane, spec, slotIndex = null, onChange, on
 }
 
 export function disposeModelViewport(view) {
+  if (view.disposed) return;
+  view.disposed = true;
+  const resources = new Set();
+  const keepMaterial = (material) => {
+    if (!material) return;
+    resources.add(material);
+    for (const value of Object.values(material)) if (value?.isTexture) resources.add(value);
+  };
+  view.root?.traverse((object) => {
+    if (object.geometry) resources.add(object.geometry);
+    if (object.skeleton) resources.add(object.skeleton);
+    for (const material of (Array.isArray(object.material) ? object.material : [object.material])) {
+      keepMaterial(material);
+    }
+  });
+  for (const entry of view.materials || []) {
+    keepMaterial(entry.original);
+    keepMaterial(entry.flat);
+    keepMaterial(entry.normal);
+  }
+  if (view.scene.environment) resources.add(view.scene.environment);
+  for (const resource of resources) resource.dispose();
+  view.scene.clear();
+  view.scene.environment = null;
+  view.root = null;
+  view.modelRoot = null;
+  view.rig = inspectRig(null);
+  view.materials = [];
   view.controls.dispose();
   view.renderer.dispose();
   view.renderer.forceContextLoss();

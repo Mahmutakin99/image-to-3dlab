@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Release model viewport geometry, materials, textures, and environment resources when closing a preview.
+
 ### Added
 - An optional macOS desktop wrapper for the existing Studio, with local build instructions and focused core tests.
 
