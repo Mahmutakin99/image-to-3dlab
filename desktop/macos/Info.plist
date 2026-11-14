@@ -1,14 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>AssetFurnace</string>
-<key>CFBundleIdentifier</key><string>com.assetfurnace.desktop</string>
-<key>CFBundleName</key><string>AssetFurnace</string>
-<key>CFBundleDisplayName</key><string>AssetFurnace</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>LSMinimumSystemVersion</key><string>12.0</string>
-<key>NSHighResolutionCapable</key><true/>
-<key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
-</dict></plist>
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>AssetFurnace</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.assetfurnace.desktop</string>
+	<key>CFBundleName</key>
+	<string>AssetFurnace</string>
+	<key>CFBundleDisplayName</key>
+	<string>AssetFurnace</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>2</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>SUPublicEDKey</key>
+	<string>jybJ8ZfLEzpvQB2QfHbNf7SfMDZqUPOU9IWysIUp9Nc=</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/Mahmutakin99/image-to-3dlab/releases/latest/download/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>AFUpstreamVersion</key>
+	<string>0.5.10</string>
+</dict>
+</plist>

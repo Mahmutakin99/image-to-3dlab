@@ -10,6 +10,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     private var server: Process?
     private var terminating = false
     private var checkingClose = false
+    private var updatesController: UpdatesController?
+    private let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("AssetFurnace", isDirectory: true)
+    private var ownership: ServerOwnership?
+    private var serverStarting = false
+    private var preparingUpdate = false
+    private var runtimeStore: RuntimeStore { RuntimeStore(root: support) }
+    private var sharedInstallation: URL {
+        URL(fileURLWithPath: UserDefaults.standard.string(forKey: "sharedInstallation")
+            ?? UserDefaults.standard.string(forKey: "installation") ?? "/Applications/AssetFurnace", isDirectory: true)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config = WKWebViewConfiguration()
@@ -24,12 +35,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         makeMenu()
+        updatesController = UpdatesController()
+        updatesController?.beforeInstall = { [weak self] in
+            guard let self else { return false }
+            return await self.prepareForAppUpdate()
+        }
         Task { await connect() }
     }
+    @objc private func showUpdates() { updatesController?.showUpdates() }
     private func makeMenu() {
         let menu = NSMenu()
         let appItem = NSMenuItem(); menu.addItem(appItem)
         let appMenu = NSMenu(); appItem.submenu = appMenu
+        appMenu.addItem(withTitle: "Güncellemeleri Kontrol Et…", action: #selector(showUpdates), keyEquivalent: "")
         appMenu.addItem(withTitle: "Quit AssetFurnace", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let editItem = NSMenuItem(); menu.addItem(editItem)
         let edit = NSMenu(title: "Edit"); editItem.submenu = edit
@@ -53,31 +71,150 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         return StudioCatalog.isValid(data)
     }
     private func connect() async {
-        if await alive() { load(); return }
-        let saved = UserDefaults.standard.string(forKey: "installation") ?? "/Applications/AssetFurnace"
-        var root = URL(fileURLWithPath: saved, isDirectory: true)
-        if !Installation.isValid(at: root) {
-            let picker = NSOpenPanel(); picker.canChooseFiles = false; picker.canChooseDirectories = true
+        guard !serverStarting else { return }
+        serverStarting = true
+        defer { serverStarting = false }
+        if await alive() {
+            ownership = try? ServerOwnership.load(from: support.appendingPathComponent("server-owner.json"))
+            load()
+            return
+        }
+        var fallback = runtimeStore.current() ?? sharedInstallation
+        if !Installation.isValid(at: fallback) {
+            let picker = NSOpenPanel()
+            picker.canChooseFiles = false
+            picker.canChooseDirectories = true
             picker.message = "Select the AssetFurnace installation folder."
             guard picker.runModal() == .OK, let selected = picker.url, Installation.isValid(at: selected) else {
                 show("AssetFurnace installation not found", "Select a folder containing viewer/serve.py and .venv/bin/python, then reopen the app.")
                 return
             }
-            root = selected; UserDefaults.standard.set(root.path, forKey: "installation")
+            fallback = selected
+            UserDefaults.standard.set(selected.path, forKey: "sharedInstallation")
         }
-        let process = Process()
-        process.executableURL = root.appendingPathComponent(".venv/bin/python")
-        process.arguments = [root.appendingPathComponent("viewer/serve.py").path, "--no-browser", "--port", "8777"]
-        process.currentDirectoryURL = root
-        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-        do { try process.run(); server = process } catch { show("Could not start AssetFurnace", error.localizedDescription); return }
-        for _ in 0..<40 {
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            if await alive() { load(); return }
-            if !process.isRunning { break }
+        let pin = Bundle.main.object(forInfoDictionaryKey: "AFServerCommit") as? String
+        var target = fallback
+        if let pin {
+            do {
+                guard let uv = findUV() else { throw RuntimeInstallError.incompleteCandidate }
+                updatesController?.setProgress("Uyumlu üretim motoru hazırlanıyor…")
+                let installer = RuntimeInstaller(store: runtimeStore)
+                target = try await installer.prepare(commit: pin, sharedInstallation: sharedInstallation, uv: uv)
+            } catch {
+                updatesController?.setProgress("Yeni motor hazırlanamadı; önceki kurulum korunuyor. Bağlantınızı kontrol edip uygulamayı yeniden açabilirsiniz.")
+                target = fallback
+            }
+        }
+        if await startServer(at: target, commit: target.lastPathComponent == pin ? pin : nil) {
+            if let pin, target.lastPathComponent == pin {
+                do { try runtimeStore.activate(version: pin) }
+                catch { updatesController?.setProgress("Motor çalışıyor fakat sürüm seçimi kaydedilemedi: \(error.localizedDescription)") }
+            }
+            load()
+            return
+        }
+        if target != fallback, await startServer(at: fallback, commit: nil) {
+            load()
+            show("Önceki motora dönüldü", "Yeni motor başlatılamadı. Kütüphaneniz korunarak önceki kurulum açıldı.")
+            return
         }
         show("Could not start AssetFurnace", "The server did not answer on port 8777. The port may be in use, or the installation may need repair.")
     }
+
+    private func findUV() -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let paths = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", home.appendingPathComponent(".local/bin/uv").path]
+        return paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }).map { URL(fileURLWithPath: $0) }
+    }
+
+    private func startServer(at root: URL, commit: String?) async -> Bool {
+        let process = Process()
+        let owner = ServerOwnership(commit: commit ?? "legacy")
+        process.executableURL = root.appendingPathComponent(".venv/bin/python")
+        process.arguments = [root.appendingPathComponent("viewer/serve.py").path, "--no-browser", "--port", "8777"]
+        process.currentDirectoryURL = root
+        var environment = ProcessInfo.processInfo.environment
+        environment.merge(owner.environment) { _, new in new }
+        process.environment = environment
+        do {
+            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+            let log = support.appendingPathComponent("server.log")
+            if !FileManager.default.fileExists(atPath: log.path) {
+                FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            }
+            let handle = try FileHandle(forWritingTo: log)
+            try handle.seekToEnd()
+            process.standardOutput = handle
+            process.standardError = handle
+            try owner.save(to: support.appendingPathComponent("server-owner.json"))
+            try process.run()
+            try? handle.close()
+            server = process
+            ownership = owner
+        } catch {
+            updatesController?.setProgress("Sunucu başlatılamadı: \(error.localizedDescription)")
+            return false
+        }
+        for _ in 0..<80 {
+            guard process.isRunning else { return false }
+            if await alive() {
+                if commit != nil {
+                    guard let data = try? await get("api/desktop-runtime"),
+                          let identity = try? JSONDecoder().decode(DesktopIdentity.self, from: data),
+                          identity.instance == owner.instance else { break }
+                }
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        if process.isRunning { process.terminate() }
+        for _ in 0..<40 {
+            if !process.isRunning { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    private func prepareForAppUpdate() async -> Bool {
+        guard !preparingUpdate, !serverStarting else { return false }
+        preparingUpdate = true
+        defer { preparingUpdate = false }
+        var maintenance: MaintenanceSession?
+        do {
+            let dirty = try await web.evaluateJavaScript("Boolean(document.querySelector('.brushstage, .sv-brush:not([hidden])'))") as? Bool ?? true
+            guard !dirty else {
+                updatesController?.setProgress("Güncellemeden önce fırça düzenlemesini kaydedin veya iptal edin.")
+                return false
+            }
+            if await alive() {
+                guard let ownership else { throw MaintenanceSessionError.foreignServer }
+                let session = MaintenanceSession(ownership: ownership)
+                maintenance = session
+                try await session.begin()
+                try await session.shutdown()
+                for _ in 0..<80 {
+                    if !(await alive()) {
+                        terminating = true
+                        return true
+                    }
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
+                throw URLError(.timedOut)
+            }
+            terminating = true
+            return true
+        } catch {
+            try? await maintenance?.resume()
+            if case MaintenanceSessionError.foreignServer = error {
+                updatesController?.setProgress("Mevcut sunucu uygulama dışında açılmış. Çalışmalarınızı kaydedip o sunucuyu kapattıktan sonra uygulamayı yeniden açın.")
+            } else {
+                updatesController?.setProgress("Güncelleme ertelendi. Üretim ve kurulum işlerinin bitmesini bekleyip yeniden deneyin.")
+            }
+            return false
+        }
+    }
+
+    private struct DesktopIdentity: Decodable { let instance: String? }
     private func load() { web.load(URLRequest(url: base.appendingPathComponent("viewer/studio.html"))) }
     private func show(_ title: String, _ message: String) {
         let alert = NSAlert(); alert.messageText = title; alert.informativeText = message; alert.runModal()
@@ -95,6 +232,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     }
     private func checkClose() async {
         defer { checkingClose = false }
+        if updatesController?.installsOnQuit == true {
+            NSApp.reply(toApplicationShouldTerminate: await prepareForAppUpdate())
+            return
+        }
         do {
             let dirty = try await web.evaluateJavaScript("Boolean(document.querySelector('.brushstage, .sv-brush:not([hidden])'))") as? Bool ?? true
             if dirty {

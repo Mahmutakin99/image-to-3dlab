@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import secrets
 import time
 import uuid
 from collections import deque
@@ -175,6 +176,9 @@ from rig_api import (
     status_payload as rig_status_payload,
 )
 from update_api import check as update_check
+from maintenance_api import Maintenance, MaintenanceBusy, runtime_identity
+
+MAINTENANCE = Maintenance()
 from welcome_api import payload as welcome_payload
 
 from image_to_3dlab import models_home, processes
@@ -2795,10 +2799,59 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             # every POST changes something: weights, the HF token, jobs, names
             if self._allowed(mutation=True):
-                self._route_post()
+                with MAINTENANCE.lock:
+                    if self._path_parts()[:2] == ["api", "maintenance"]:
+                        self._maintenance_post()
+                    elif MAINTENANCE.active:
+                        self.close_connection = True
+                        self._send_json(503, {"error": "An update is being prepared; try again afterwards."})
+                    else:
+                        self._route_post()
         finally:
             usage_api.note_request(self._path_parts(), self.headers.get(usage_api.CLIENT_HEADER),
                                    "POST", self._status_code)
+
+    def _maintenance_post(self) -> None:
+        parts = self._path_parts()
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > 4096:
+                self.close_connection = True
+                self._send_json(400, {"error": "Invalid maintenance request size"})
+                return
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("Expected an object")
+            if parts == ["api", "maintenance", "begin"]:
+                busy = [name for name, probe in HEAVY_JOBS.items() if probe()]
+                if self._chains().running() is not None:
+                    busy.append("chain")
+                if any(job.process is not None and job.process.poll() is None for job in DOWNLOADS.values()):
+                    busy.append("download")
+                self._send_json(200, {"token": MAINTENANCE.begin(busy), "active": True})
+            elif parts == ["api", "maintenance", "shutdown"]:
+                owner = os.environ.get("I3D_DESKTOP_OWNER", "")
+                supplied_owner = self.headers.get("X-AssetFurnace-Owner", "")
+                token = body.get("token")
+                if (not owner or not secrets.compare_digest(owner, supplied_owner)
+                        or not isinstance(token, str) or not MAINTENANCE.authorizes(token)):
+                    raise PermissionError("Only the owning desktop app with a maintenance lease may stop this server")
+                self._send_json(202, {"stopping": True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+            elif parts == ["api", "maintenance", "end"]:
+                token = body.get("token")
+                if not isinstance(token, str):
+                    raise ValueError("Expected a maintenance token")
+                MAINTENANCE.end(token)
+                self._send_json(200, {"active": False})
+            else:
+                self._send_json(404, {"error": "Unknown maintenance action"})
+        except MaintenanceBusy as exc:
+            self._send_json(409, {"error": str(exc)})
+        except PermissionError as exc:
+            self._send_json(403, {"error": str(exc)})
+        except (ValueError, TypeError) as exc:
+            self._send_json(400, {"error": str(exc)})
 
     def _route_post(self) -> None:
         parts = self._path_parts()
@@ -3428,6 +3481,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parts == ["api", "hf", "status"]:
             self._send_json(200, hf_api.status())
+            return
+        if parts == ["api", "desktop-runtime"]:
+            self._send_json(200, runtime_identity(os.environ))
             return
         if parts == ["api", "catalog"]:
             self._send_json(200, catalog_payload())

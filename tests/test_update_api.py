@@ -104,3 +104,18 @@ def test_the_request_goes_to_this_repo_releases_only():
 def test_cache_file_records_when_it_asked(tmp_path):
     check(tmp_path, Fetch(), now=1_234.0)
     assert json.loads((tmp_path / "check.json").read_text())["checked_at"] == 1_234.0
+
+
+def test_manual_check_bypasses_daily_cache(tmp_path):
+    fetch = Fetch()
+    cache = tmp_path / "manual.json"
+    update_api.check(cache=cache, fetch=fetch, env={}, now=1000)
+    update_api.check(cache=cache, fetch=fetch, env={}, now=1001, force=True)
+    assert fetch.calls == 2
+
+def test_manual_check_respects_environment_opt_out(tmp_path):
+    fetch = Fetch()
+    result = update_api.check(cache=tmp_path / "manual.json", fetch=fetch,
+                              env={"I3D_NO_UPDATE_CHECK": "1"}, force=True)
+    assert not result["enabled"]
+    assert fetch.calls == 0

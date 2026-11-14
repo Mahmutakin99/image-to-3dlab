@@ -66,7 +66,7 @@ def _read_cache(path: Path) -> dict[str, Any]:
 def check(current: str = image_to_3dlab.__version__, now: float | None = None,
           cache: Path = CACHE, fetch: Callable[[], dict[str, Any]] = fetch_latest,
           env: dict[str, str] | None = None, repo: Path = REPO,
-          family: str | None = None) -> dict[str, Any]:
+          family: str | None = None, force: bool = False) -> dict[str, Any]:
     env = os.environ if env is None else env
     now = time.time() if now is None else now
     result: dict[str, Any] = {
@@ -79,7 +79,7 @@ def check(current: str = image_to_3dlab.__version__, now: float | None = None,
 
     cached = _read_cache(cache)
     checked_at = cached.get("checked_at")
-    if not isinstance(checked_at, (int, float)) or now - checked_at >= MAX_AGE:
+    if force or not isinstance(checked_at, (int, float)) or now - checked_at >= MAX_AGE:
         try:
             latest = fetch()
             cached = {"checked_at": now, "tag": latest.get("tag_name"),
